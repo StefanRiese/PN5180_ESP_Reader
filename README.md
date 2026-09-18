@@ -145,3 +145,9 @@ a truly frozen state - worth a manual power cycle either way.
    e.g. `2.1.0`) both publish their own MQTT Discovery config too, so
    they show up as regular (diagnostic) entities grouped under the same
    device as the Tag scanner — no manual YAML needed for those either.
+8. A **Heartbeat LED** switch entity (config category) lets you turn the
+   visual LED blip off from Home Assistant if it's distracting — this
+   only affects the LED, the watchdog safety mechanism itself always
+   stays active regardless. Your choice survives a device reboot: HA
+   publishes the on/off command retained, so a fresh reconnect after
+   any restart immediately re-applies it.

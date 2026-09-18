@@ -52,6 +52,9 @@ String TOPIC_HEARTBEAT;   // periodic "still actually running" uptime signal
 String TOPIC_HEARTBEAT_DISCOVERY; // HA discovery config for the heartbeat sensor
 String TOPIC_VERSION;     // firmware version, as an HA entity
 String TOPIC_VERSION_DISCOVERY;   // HA discovery config for the version sensor
+String TOPIC_HEARTBEAT_LED_STATE; // current on/off state of the heartbeat LED
+String TOPIC_HEARTBEAT_LED_SET;   // HA sends ON/OFF commands here
+String TOPIC_HEARTBEAT_LED_DISCOVERY; // HA discovery config for the switch
 
 /**************************************************
   Existing defines / pins (unchanged from original sketch)
@@ -124,6 +127,10 @@ unsigned long lastHeartbeatMillis = 0;
 unsigned long lastMqttHeartbeatMillis = 0;
 bool tagPresentLastPoll = false;
 
+// Controls only the visual heartbeat LED blip - the watchdog safety
+// mechanism itself (checkWatchdog()) always stays active regardless.
+bool heartbeatLedEnabled = true;
+
 // --- Reconnect state (non-blocking, with exponential backoff) ---
 unsigned long lastWifiAttempt = 0;
 unsigned long wifiRetryInterval = 5000;     // starts at 5s
@@ -166,6 +173,9 @@ void setup()
   TOPIC_HEARTBEAT_DISCOVERY = "homeassistant/sensor/" + DEVICE_ID + "_heartbeat/config";
   TOPIC_VERSION     = DEVICE_ID + "/version";
   TOPIC_VERSION_DISCOVERY = "homeassistant/sensor/" + DEVICE_ID + "_version/config";
+  TOPIC_HEARTBEAT_LED_STATE = DEVICE_ID + "/heartbeat_led/state";
+  TOPIC_HEARTBEAT_LED_SET   = DEVICE_ID + "/heartbeat_led/set";
+  TOPIC_HEARTBEAT_LED_DISCOVERY = "homeassistant/switch/" + DEVICE_ID + "_heartbeat_led/config";
 
   // --- PN5180 init (same as original) ---
   nfc15693.begin();
@@ -188,6 +198,7 @@ void setup()
   mqtt.setBufferSize(MQTT_BUFFER_SIZE); // large enough for the HA discovery JSON payload
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setSocketTimeout(3); // seconds - keep a dead broker from stalling loop() too long
+  mqtt.setCallback(mqttCallback);
   connectMqtt();
 }
 
@@ -218,7 +229,7 @@ void loop()
   // Brief periodic LED blip so you can tell at a glance the reader is
   // still alive and what it's connected to, without needing serial:
   // green = WiFi+MQTT ok, amber = WiFi ok but MQTT down, red = WiFi down
-  if (now - lastHeartbeatMillis >= HEARTBEAT_INTERVAL_MS) {
+  if (heartbeatLedEnabled && now - lastHeartbeatMillis >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatMillis = now;
     heartbeat();
   }
@@ -374,17 +385,33 @@ void connectMqtt()
     publishDiscovery();
     publishHeartbeatDiscovery();
     publishVersionDiscovery();
+    publishHeartbeatLedDiscovery();
     publishVersion();
     publishHeartbeat();
+    publishHeartbeatLedState();
+    // Subscriptions don't survive a reconnect (clean session), so
+    // re-subscribe here. The broker immediately redelivers the last
+    // retained command (see the "retain":true in the discovery config),
+    // so a reboot correctly re-applies your last on/off choice.
+    mqtt.subscribe(TOPIC_HEARTBEAT_LED_SET.c_str());
     lastMqttHeartbeatMillis = millis(); // don't immediately re-fire in loop()
   }
 }
 
-// Publishes the retained MQTT Discovery config so Home Assistant
-// auto-creates a "tag" scanner for this device - no YAML needed.
-// Shared "device" block so the tag scanner, heartbeat sensor, and
-// version sensor all group under the same device entry in Home
-// Assistant (same identifiers = same device).
+// Handles incoming commands from Home Assistant (currently just the
+// heartbeat LED on/off switch).
+void mqttCallback(char* topic, byte* payload, unsigned int length)
+{
+  if (TOPIC_HEARTBEAT_LED_SET.equals(topic)) {
+    bool enable = (length == 2 && payload[0] == 'O' && payload[1] == 'N');
+    heartbeatLedEnabled = enable;
+    publishHeartbeatLedState();
+  }
+}
+
+// Shared "device" block so the tag scanner, heartbeat sensor, version
+// sensor, and heartbeat LED switch all group under the same device
+// entry in Home Assistant (same identifiers = same device).
 String deviceBlockJson()
 {
   return String("{") +
@@ -396,6 +423,8 @@ String deviceBlockJson()
   "}";
 }
 
+// Publishes the retained MQTT Discovery config so Home Assistant
+// auto-creates a "tag" scanner for this device - no YAML needed.
 void publishDiscovery()
 {
   String payload = String("{") +
@@ -447,6 +476,32 @@ void publishVersionDiscovery()
 void publishVersion()
 {
   mqtt.publish(TOPIC_VERSION.c_str(), VERSION, true);
+}
+
+// Publishes HA switch discovery for the heartbeat LED. "retain":true
+// makes HA publish its on/off commands to the command topic retained,
+// so a fresh subscribe after any reboot immediately redelivers the
+// last choice - no local flash storage needed to survive a restart.
+void publishHeartbeatLedDiscovery()
+{
+  String payload = String("{") +
+    "\"name\":\"Heartbeat LED\"," +
+    "\"unique_id\":\"" + DEVICE_ID + "_heartbeat_led\"," +
+    "\"state_topic\":\"" + TOPIC_HEARTBEAT_LED_STATE + "\"," +
+    "\"command_topic\":\"" + TOPIC_HEARTBEAT_LED_SET + "\"," +
+    "\"retain\":true," +
+    "\"availability_topic\":\"" + TOPIC_AVAILABILITY + "\"," +
+    "\"icon\":\"mdi:led-outline\"," +
+    "\"entity_category\":\"config\"," +
+    "\"device\":" + deviceBlockJson() +
+  "}";
+
+  mqtt.publish(TOPIC_HEARTBEAT_LED_DISCOVERY.c_str(), payload.c_str(), true);
+}
+
+void publishHeartbeatLedState()
+{
+  mqtt.publish(TOPIC_HEARTBEAT_LED_STATE.c_str(), heartbeatLedEnabled ? "ON" : "OFF", true);
 }
 
 /**************************************************

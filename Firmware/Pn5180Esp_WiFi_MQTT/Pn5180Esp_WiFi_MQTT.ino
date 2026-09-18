@@ -24,6 +24,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
+#include <Ticker.h>
 
 #include <PubSubClient.h>
 
@@ -56,7 +57,7 @@ String TOPIC_DISCOVERY;   // HA discovery config topic
 #define LED_BRIGHTNESS 10
 // Much dimmer than LED_BRIGHTNESS, so the "still alive" heartbeat blip
 // doesn't compete visually with an actual tag-recognized flash
-#define HEARTBEAT_BRIGHTNESS 2
+#define HEARTBEAT_BRIGHTNESS 1
 // Tag-recognized flash: a distinct color (cyan) and noticeably longer
 // than the heartbeat, so a real scan is unmistakable at a glance
 #define TAG_FLASH_DURATION_MS 500
@@ -82,6 +83,17 @@ String TOPIC_DISCOVERY;   // HA discovery config topic
 // How often to blip the status LED to show the reader is still alive, ms
 #define HEARTBEAT_INTERVAL_MS 2000
 
+// Safety net: the PN5180 library's SPI busy-wait loops (waiting on the
+// BUSY pin / IRQ status) have no timeout at all, so a marginal SPI
+// transaction can hang loop() forever with no recovery - not even the
+// ESP8266's own watchdog reliably catches this, since these loops keep
+// calling digitalRead()/getIRQStatus() often enough to look "alive" to
+// it. This app-level watchdog runs on its own hardware timer (Ticker),
+// independent of loop(), and force-restarts the board if loop() hasn't
+// checked in within WATCHDOG_TIMEOUT_MS.
+#define WATCHDOG_TIMEOUT_MS 8000
+#define WATCHDOG_CHECK_INTERVAL_S 1
+
 /**************************************************
   Globals
 **************************************************/
@@ -92,6 +104,9 @@ Adafruit_NeoPixel pixels = Adafruit_NeoPixel(1, WS2812B_PIN, NEO_GRB + NEO_KHZ80
 
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
+
+Ticker watchdogTicker;
+volatile unsigned long lastLoopFeedMillis = 0;
 
 String lastUid = "";
 unsigned long tagAbsentSinceMillis = 0; // when the tag last became absent
@@ -114,6 +129,11 @@ void setup()
 {
   pixels.begin();
   ledFeedback(LED_BRIGHTNESS, LED_BRIGHTNESS, LED_BRIGHTNESS, 100);
+
+  // Arm the watchdog before anything that touches the PN5180 (including
+  // the init below), since its SPI busy-waits can hang during boot too.
+  lastLoopFeedMillis = millis();
+  watchdogTicker.attach(WATCHDOG_CHECK_INTERVAL_S, checkWatchdog);
 
   Serial.setTimeout(50);
   Serial.begin(115200);
@@ -163,6 +183,8 @@ void setup()
 *************************************/
 void loop()
 {
+  lastLoopFeedMillis = millis(); // tell the watchdog we're still alive
+
   // Keep network alive - non-blocking, with backoff so an outage
   // doesn't freeze tag polling or hammer the router/broker
   maintainWiFi();
@@ -189,6 +211,16 @@ void loop()
   }
 }
 
+// Runs on its own hardware timer (Ticker), independent of loop() - so it
+// still fires even if loop() is stuck inside a PN5180 SPI busy-wait that
+// never returns. Restarts the board if loop() hasn't checked in recently.
+void checkWatchdog()
+{
+  if (millis() - lastLoopFeedMillis > WATCHDOG_TIMEOUT_MS) {
+    ESP.restart();
+  }
+}
+
 void heartbeat()
 {
   if (WiFi.status() != WL_CONNECTED) {
@@ -212,6 +244,7 @@ void connectWiFi()
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
+    lastLoopFeedMillis = millis(); // this loop alone can run longer than WATCHDOG_TIMEOUT_MS
     delay(250);
     Serial.print(".");
     ledFeedback(0, 0, LED_BRIGHTNESS, 100);

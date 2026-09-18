@@ -95,6 +95,18 @@ Corrupted/partial reads (e.g. a UID that's implausible, such as being
 mostly zero bytes) are filtered out before ever reaching the LED or MQTT,
 so a flash only ever means a real tag was seen.
 
+## Watchdog
+
+The PN5180 library's SPI wait loops have no timeout, so a marginal SPI
+transaction can occasionally hang the sketch completely (LED goes fully
+dark, no heartbeat at all - this is different from a "WiFi down" red
+heartbeat, which still blips). To recover automatically from this, the
+sketch runs its own watchdog on an independent hardware timer: if the
+main loop hasn't checked in for 8 seconds, the board restarts itself.
+If you ever see the LED go completely dark for more than ~10 seconds,
+that's this watchdog either about to fire or (rarely) not having caught
+a truly frozen state - worth a manual power cycle either way.
+
 1. Follow steps 1–5 above (board support + libraries + wiring), and also
    install via Library Manager:
    - `PubSubClient` (by Nick O'Leary)

@@ -143,7 +143,7 @@ void handleCommand(String command)
     delay(50);
 
     // try to unlock with t***e password
-    ISO15693ErrorCode myrc = nfc15693.disablePrivacyMode(password2);
+    ISO15693ErrorCode myrc = nfc15693.unlockICODESLIX2(password2);
     if (ISO15693_EC_OK == myrc)
     {
       Serial.println("ok");
@@ -157,7 +157,7 @@ void handleCommand(String command)
       delay(50);
 
       //try to unlock with default password");
-      ISO15693ErrorCode myrc = nfc15693.disablePrivacyMode(password);
+      ISO15693ErrorCode myrc = nfc15693.unlockICODESLIX2(password);
       if (ISO15693_EC_OK == myrc)
       {
         Serial.println("ok");

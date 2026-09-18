@@ -314,7 +314,7 @@ bool tryUnlockPrivacy()
   nfc15693.setupRF();
   delay(50);
 
-  if (ISO15693_EC_OK == nfc15693.disablePrivacyMode(password2)) {
+  if (ISO15693_EC_OK == nfc15693.unlockICODESLIX2(password2)) {
     return true;
   }
 
@@ -322,7 +322,7 @@ bool tryUnlockPrivacy()
   nfc15693.setupRF();
   delay(50);
 
-  return (ISO15693_EC_OK == nfc15693.disablePrivacyMode(password));
+  return (ISO15693_EC_OK == nfc15693.unlockICODESLIX2(password));
 }
 
 /**************************************************

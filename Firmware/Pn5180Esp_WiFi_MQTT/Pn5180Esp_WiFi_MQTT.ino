@@ -48,11 +48,15 @@ String DEVICE_NAME;    // e.g. "PN5180 Reader (living_room)"
 String TOPIC_SCAN;        // where scanned UIDs get published
 String TOPIC_AVAILABILITY; // online/offline (LWT)
 String TOPIC_DISCOVERY;   // HA discovery config topic
+String TOPIC_HEARTBEAT;   // periodic "still actually running" uptime signal
+String TOPIC_HEARTBEAT_DISCOVERY; // HA discovery config for the heartbeat sensor
+String TOPIC_VERSION;     // firmware version, as an HA entity
+String TOPIC_VERSION_DISCOVERY;   // HA discovery config for the version sensor
 
 /**************************************************
   Existing defines / pins (unchanged from original sketch)
 **************************************************/
-#define VERSION "2.0-wifi"
+#define VERSION "2.1.0"
 #define SKETCHNAME "Pn5180Esp"
 #define LED_BRIGHTNESS 10
 // Much dimmer than LED_BRIGHTNESS, so the "still alive" heartbeat blip
@@ -82,6 +86,9 @@ String TOPIC_DISCOVERY;   // HA discovery config topic
 #define TAG_AWAY_THRESHOLD_MS 5000
 // How often to blip the status LED to show the reader is still alive, ms
 #define HEARTBEAT_INTERVAL_MS 2000
+// How often to publish an MQTT heartbeat (device uptime) so the broker
+// side can detect "connected but actually hung", not just "disconnected"
+#define MQTT_HEARTBEAT_INTERVAL_MS 30000
 
 // Safety net: the PN5180 library's SPI busy-wait loops (waiting on the
 // BUSY pin / IRQ status) have no timeout at all, so a marginal SPI
@@ -108,10 +115,13 @@ PubSubClient mqtt(espClient);
 Ticker watchdogTicker;
 volatile unsigned long lastLoopFeedMillis = 0;
 
-String lastUid = "";
+char lastUid[17] = ""; // 16 hex chars + null terminator; fixed buffer to
+                        // avoid churning the heap with a new String every
+                        // ~500ms poll while a tag sits on the reader
 unsigned long tagAbsentSinceMillis = 0; // when the tag last became absent
 unsigned long lastPollMillis = 0;
 unsigned long lastHeartbeatMillis = 0;
+unsigned long lastMqttHeartbeatMillis = 0;
 bool tagPresentLastPoll = false;
 
 // --- Reconnect state (non-blocking, with exponential backoff) ---
@@ -152,6 +162,10 @@ void setup()
   TOPIC_SCAN        = DEVICE_ID + "/tag_scanned";
   TOPIC_AVAILABILITY = DEVICE_ID + "/status";
   TOPIC_DISCOVERY   = "homeassistant/tag/" + DEVICE_ID + "/config";
+  TOPIC_HEARTBEAT   = DEVICE_ID + "/heartbeat";
+  TOPIC_HEARTBEAT_DISCOVERY = "homeassistant/sensor/" + DEVICE_ID + "_heartbeat/config";
+  TOPIC_VERSION     = DEVICE_ID + "/version";
+  TOPIC_VERSION_DISCOVERY = "homeassistant/sensor/" + DEVICE_ID + "_version/config";
 
   // --- PN5180 init (same as original) ---
   nfc15693.begin();
@@ -168,7 +182,6 @@ void setup()
   Serial.println(F("PN5180 ready."));
 
   // --- WiFi + MQTT ---
-  randomSeed(analogRead(A0) ^ micros()); // avoid repeatable MQTT client IDs across reboots
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false); // don't wear out flash with every reconnect
   connectWiFi();
@@ -209,6 +222,14 @@ void loop()
     lastHeartbeatMillis = now;
     heartbeat();
   }
+
+  // Periodic MQTT heartbeat (device uptime) so the broker/HA side can
+  // tell "actually still running" from "connected but silently hung" -
+  // the availability topic alone only updates on connect/disconnect.
+  if (mqtt.connected() && now - lastMqttHeartbeatMillis >= MQTT_HEARTBEAT_INTERVAL_MS) {
+    lastMqttHeartbeatMillis = now;
+    publishHeartbeat();
+  }
 }
 
 // Runs on its own hardware timer (Ticker), independent of loop() - so it
@@ -219,6 +240,18 @@ void checkWatchdog()
   if (millis() - lastLoopFeedMillis > WATCHDOG_TIMEOUT_MS) {
     ESP.restart();
   }
+}
+
+// Publishes device uptime (seconds since last boot) to TOPIC_HEARTBEAT,
+// retained, so a newly-subscribed client (e.g. Home Assistant restarting)
+// immediately sees the last known value instead of waiting for the next
+// interval. A stale value, or one that unexpectedly resets to a small
+// number, is visible proof the device hung or rebooted.
+void publishHeartbeat()
+{
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%lu", millis() / 1000);
+  mqtt.publish(TOPIC_HEARTBEAT.c_str(), buf, true);
 }
 
 void heartbeat()
@@ -339,26 +372,81 @@ void connectMqtt()
   if (ok) {
     mqtt.publish(TOPIC_AVAILABILITY.c_str(), "online", true);
     publishDiscovery();
+    publishHeartbeatDiscovery();
+    publishVersionDiscovery();
+    publishVersion();
+    publishHeartbeat();
+    lastMqttHeartbeatMillis = millis(); // don't immediately re-fire in loop()
   }
 }
 
 // Publishes the retained MQTT Discovery config so Home Assistant
 // auto-creates a "tag" scanner for this device - no YAML needed.
+// Shared "device" block so the tag scanner, heartbeat sensor, and
+// version sensor all group under the same device entry in Home
+// Assistant (same identifiers = same device).
+String deviceBlockJson()
+{
+  return String("{") +
+    "\"identifiers\":[\"" + DEVICE_ID + "\"]," +
+    "\"name\":\"" + DEVICE_NAME + "\"," +
+    "\"manufacturer\":\"DIY\"," +
+    "\"model\":\"PN5180 ESP Reader\"," +
+    "\"sw_version\":\"" + VERSION + "\"" +
+  "}";
+}
+
 void publishDiscovery()
 {
   String payload = String("{") +
     "\"topic\":\"" + TOPIC_SCAN + "\"," +
     "\"availability_topic\":\"" + TOPIC_AVAILABILITY + "\"," +
-    "\"device\":{" +
-      "\"identifiers\":[\"" + DEVICE_ID + "\"]," +
-      "\"name\":\"" + DEVICE_NAME + "\"," +
-      "\"manufacturer\":\"DIY\"," +
-      "\"model\":\"PN5180 ESP Reader\"," +
-      "\"sw_version\":\"" + VERSION + "\"" +
-    "}" +
+    "\"device\":" + deviceBlockJson() +
   "}";
 
   mqtt.publish(TOPIC_DISCOVERY.c_str(), payload.c_str(), true); // retained!
+}
+
+// Publishes HA sensor discovery for the heartbeat topic, so it shows up
+// as a proper entity (grouped under the same device) instead of just a
+// raw MQTT topic.
+void publishHeartbeatDiscovery()
+{
+  String payload = String("{") +
+    "\"name\":\"Heartbeat\"," +
+    "\"unique_id\":\"" + DEVICE_ID + "_heartbeat\"," +
+    "\"state_topic\":\"" + TOPIC_HEARTBEAT + "\"," +
+    "\"availability_topic\":\"" + TOPIC_AVAILABILITY + "\"," +
+    "\"unit_of_measurement\":\"s\"," +
+    "\"icon\":\"mdi:heart-pulse\"," +
+    "\"entity_category\":\"diagnostic\"," +
+    "\"device\":" + deviceBlockJson() +
+  "}";
+
+  mqtt.publish(TOPIC_HEARTBEAT_DISCOVERY.c_str(), payload.c_str(), true);
+}
+
+// Publishes HA sensor discovery for the firmware version, so it shows
+// up as an entity (grouped under the same device), not just the
+// device-info page's static "Firmware" field.
+void publishVersionDiscovery()
+{
+  String payload = String("{") +
+    "\"name\":\"Firmware Version\"," +
+    "\"unique_id\":\"" + DEVICE_ID + "_version\"," +
+    "\"state_topic\":\"" + TOPIC_VERSION + "\"," +
+    "\"availability_topic\":\"" + TOPIC_AVAILABILITY + "\"," +
+    "\"icon\":\"mdi:chip\"," +
+    "\"entity_category\":\"diagnostic\"," +
+    "\"device\":" + deviceBlockJson() +
+  "}";
+
+  mqtt.publish(TOPIC_VERSION_DISCOVERY.c_str(), payload.c_str(), true);
+}
+
+void publishVersion()
+{
+  mqtt.publish(TOPIC_VERSION.c_str(), VERSION, true);
 }
 
 /**************************************************
@@ -414,19 +502,20 @@ void pollTag()
   }
 
   if (rc == ISO15693_EC_OK) {
-    String uidStr = uidToString(uid);
-    bool isNewTag = (uidStr != lastUid);
+    char uidBuf[17];
+    uidToBuffer(uid, uidBuf);
+    bool isNewTag = (strcmp(uidBuf, lastUid) != 0);
 
     if (isNewTag) {
       // a different tag than last time - always trigger
-      lastUid = uidStr;
-      onTagScanned(uidStr);
+      strcpy(lastUid, uidBuf);
+      onTagScanned(uidBuf);
     } else if (!tagPresentLastPoll) {
       // same tag as before, but it had been lifted off - only
       // re-trigger if it was actually away for long enough
       unsigned long awayDuration = millis() - tagAbsentSinceMillis;
       if (awayDuration >= TAG_AWAY_THRESHOLD_MS) {
-        onTagScanned(uidStr);
+        onTagScanned(uidBuf);
       }
       // else: put back too soon, ignored - still just sitting there as far as HA is concerned
     }
@@ -443,12 +532,12 @@ void pollTag()
   }
 }
 
-void onTagScanned(String uid)
+void onTagScanned(const char* uid)
 {
   ledFeedback(0, LED_BRIGHTNESS, LED_BRIGHTNESS, TAG_FLASH_DURATION_MS); // cyan: tag recognized
 
   if (mqtt.connected()) {
-    bool sent = mqtt.publish(TOPIC_SCAN.c_str(), uid.c_str(), false); // not retained
+    bool sent = mqtt.publish(TOPIC_SCAN.c_str(), uid, false); // not retained
     if (!sent) {
       ledFeedback(LED_BRIGHTNESS, LED_BRIGHTNESS, 0, 300); // amber: publish failed
     }
@@ -474,15 +563,15 @@ bool isPlausibleUid(uint8_t* uid)
   return zeroBytes <= 5;
 }
 
-String uidToString(uint8_t* uid)
+// Writes the UID as 16 uppercase hex chars + null terminator into `out`
+// (caller-provided buffer, at least 17 bytes). Avoids building a String
+// via repeated concatenation, since this runs on every poll (~500ms)
+// while a tag is on the reader and String churn fragments the heap.
+void uidToBuffer(uint8_t* uid, char* out)
 {
-  String response = "";
   for (int i = 0; i < 8; i++) {
-    response += (uid[7 - i] < 0x10 ? "0" : "");
-    response += String(uid[7 - i], HEX);
+    sprintf(out + i * 2, "%02X", uid[7 - i]);
   }
-  response.toUpperCase();
-  return response;
 }
 
 /**************************************************
@@ -541,15 +630,16 @@ void handleCommand(String command)
     ISO15693ErrorCode rc = nfc15693.getInventory(uid);
     if (rc == ISO15693_EC_OK)
     {
-      response = uidToString(uid);
+      char uidBuf[17];
+      uidToBuffer(uid, uidBuf);
+      Serial.println(uidBuf);
       ledFeedback(0, LED_BRIGHTNESS, 0, 100);
     }
     else
     {
+      Serial.println();
       ledFeedback(LED_BRIGHTNESS, 0, 0, 100);
     }
-
-    Serial.println(response);
   }
   else if (command.startsWith("w"))
   {

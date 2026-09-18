@@ -135,3 +135,13 @@ a truly frozen state - worth a manual power cycle either way.
 5. In Home Assistant, create an automation with trigger type **Tag
    scanned** for this device, and match on the specific `tag_id` (the
    UID) to react to individual tags.
+6. `<location>_<chipid>/heartbeat` (retained) holds the device's uptime
+   in seconds, republished every 30s. Unlike `status` — which only
+   changes on connect/disconnect and can't tell "connected but silently
+   hung" from "actually working" — a stale or unexpectedly-reset
+   heartbeat is visible proof something's wrong. Useful for an HA
+   automation like "notify me if no heartbeat update in N minutes."
+7. The heartbeat and the firmware version (`<location>_<chipid>/version`,
+   e.g. `2.1.0`) both publish their own MQTT Discovery config too, so
+   they show up as regular (diagnostic) entities grouped under the same
+   device as the Tag scanner — no manual YAML needed for those either.

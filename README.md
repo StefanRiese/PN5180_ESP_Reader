@@ -78,6 +78,13 @@ Assistant via MQTT Tag discovery — no host PC needed. It's built on top of
 same (plus a new `w` command for WiFi/MQTT status), so any existing
 serial-based tooling keeps working unchanged.
 
+Every 2 seconds it also blips the status LED briefly so you can tell at a
+glance that it's alive, without needing a serial connection: **green** =
+WiFi and MQTT both up, **amber** = WiFi up but MQTT down, **red** = WiFi
+down. This heartbeat is separate from (and much dimmer/briefer than) the
+scan-result flash (green/red on a tag read, amber if a scan couldn't be
+published).
+
 1. Follow steps 1–5 above (board support + libraries + wiring), and also
    install via Library Manager:
    - `PubSubClient` (by Nick O'Leary)

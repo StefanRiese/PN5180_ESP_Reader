@@ -73,6 +73,8 @@ String TOPIC_DISCOVERY;   // HA discovery config topic
 // Minimum time the SAME tag must be physically away from the reader
 // before it's allowed to trigger onTagScanned() again, ms
 #define TAG_AWAY_THRESHOLD_MS 5000
+// How often to blip the status LED to show the reader is still alive, ms
+#define HEARTBEAT_INTERVAL_MS 2000
 
 /**************************************************
   Globals
@@ -88,6 +90,7 @@ PubSubClient mqtt(espClient);
 String lastUid = "";
 unsigned long tagAbsentSinceMillis = 0; // when the tag last became absent
 unsigned long lastPollMillis = 0;
+unsigned long lastHeartbeatMillis = 0;
 bool tagPresentLastPoll = false;
 
 // --- Reconnect state (non-blocking, with exponential backoff) ---
@@ -169,6 +172,25 @@ void loop()
   if (now - lastPollMillis >= POLL_INTERVAL_MS) {
     lastPollMillis = now;
     pollTag();
+  }
+
+  // Brief periodic LED blip so you can tell at a glance the reader is
+  // still alive and what it's connected to, without needing serial:
+  // green = WiFi+MQTT ok, amber = WiFi ok but MQTT down, red = WiFi down
+  if (now - lastHeartbeatMillis >= HEARTBEAT_INTERVAL_MS) {
+    lastHeartbeatMillis = now;
+    heartbeat();
+  }
+}
+
+void heartbeat()
+{
+  if (WiFi.status() != WL_CONNECTED) {
+    ledFeedback(LED_BRIGHTNESS, 0, 0, 20);
+  } else if (!mqtt.connected()) {
+    ledFeedback(LED_BRIGHTNESS, LED_BRIGHTNESS, 0, 20);
+  } else {
+    ledFeedback(0, LED_BRIGHTNESS, 0, 20);
   }
 }
 

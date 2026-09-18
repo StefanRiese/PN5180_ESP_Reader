@@ -25,11 +25,14 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 
-// Must be defined BEFORE including PubSubClient.h - the default 256-byte
-// limit is too small for our HA discovery JSON payload + topic combined,
-// which causes mqtt.publish() to silently fail with no error.
-#define MQTT_MAX_PACKET_SIZE 512
 #include <PubSubClient.h>
+
+// The default 256-byte buffer is too small for our HA discovery JSON
+// payload + topic combined, which makes mqtt.publish() silently fail
+// with no error. PubSubClient.cpp is compiled as its own translation
+// unit, so a #define here wouldn't reach it - the buffer must be
+// grown at runtime instead, via setBufferSize() in setup().
+#define MQTT_BUFFER_SIZE 512
 
 // WIFI_SSID, WIFI_PASSWORD, MQTT_HOST, MQTT_PORT, MQTT_USER,
 // MQTT_PASSWORD and LOCATION_NAME are defined in secrets.h (gitignored -
@@ -140,6 +143,7 @@ void setup()
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false); // don't wear out flash with every reconnect
   connectWiFi();
+  mqtt.setBufferSize(MQTT_BUFFER_SIZE); // large enough for the HA discovery JSON payload
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setSocketTimeout(3); // seconds - keep a dead broker from stalling loop() too long
   connectMqtt();
@@ -256,7 +260,11 @@ void connectMqtt()
 {
   if (WiFi.status() != WL_CONNECTED) return;
 
-  String clientId = String(DEVICE_ID) + "-" + String(random(0xffff), HEX);
+  // Stable (not randomized) so a reconnect makes the broker take over the
+  // old session immediately instead of leaving it to linger until its own
+  // keepalive times out - a lingering old session's Last Will would later
+  // overwrite our fresh "online" status back to "offline".
+  String clientId = DEVICE_ID;
 
   bool ok;
   if (strlen(MQTT_USER) > 0) {

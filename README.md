@@ -81,13 +81,20 @@ serial-based tooling keeps working unchanged.
 1. Follow steps 1–5 above (board support + libraries + wiring), and also
    install via Library Manager:
    - `PubSubClient` (by Nick O'Leary)
-2. Open `Firmware/Pn5180Esp_WiFi_MQTT/Pn5180Esp_WiFi_MQTT.ino` and edit the
-   config block near the top:
-   - `WIFI_SSID` / `WIFI_PASSWORD` — your WiFi credentials
-   - `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASSWORD` — your
-     MQTT broker (e.g. the Mosquitto add-on in Home Assistant)
-   - `LOCATION_NAME` — a short label per device (e.g. `kitchen`); it's
-     combined with the chip's unique ID so multiple readers never collide
+2. **Set up your WiFi/MQTT credentials via `secrets.h`** — this repo is
+   public, so credentials are kept out of version control:
+   - Copy `Firmware/Pn5180Esp_WiFi_MQTT/secrets.h.example` to
+     `Firmware/Pn5180Esp_WiFi_MQTT/secrets.h` (same folder).
+   - Edit `secrets.h` and fill in your own values:
+     - `WIFI_SSID` / `WIFI_PASSWORD` — your WiFi credentials
+     - `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASSWORD` — your
+       MQTT broker (e.g. the Mosquitto add-on in Home Assistant)
+     - `LOCATION_NAME` — a short label per device (e.g. `kitchen`); it's
+       combined with the chip's unique ID so multiple readers never collide
+   - `secrets.h` is listed in `.gitignore` and will never be committed or
+     pushed — only `secrets.h.example` (with placeholder values) is
+     tracked. The sketch `#include "secrets.h"`, so it won't compile
+     until you've created that file.
 3. Upload and open the Serial Monitor (`115200` baud) to confirm WiFi and
    MQTT connect successfully.
 4. The reader publishes each scanned UID (as plain text) to

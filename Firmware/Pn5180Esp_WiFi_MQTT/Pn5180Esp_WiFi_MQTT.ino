@@ -14,6 +14,11 @@
     - Adafruit NeoPixel
     - PubSubClient (by Nick O'Leary)      <-- NEW
     - ESP8266WiFi (bundled with ESP8266 board package) <-- NEW
+
+  WiFi/MQTT config: copy secrets.h.example (in this same folder) to
+  secrets.h and fill in your own values there. secrets.h is gitignored,
+  so your real credentials never get committed to this public repo.
+  See the README for details.
 **************************************************/
 #include <PN5180ISO15693.h>
 #include <Adafruit_NeoPixel.h>
@@ -26,23 +31,10 @@
 #define MQTT_MAX_PACKET_SIZE 512
 #include <PubSubClient.h>
 
-/**************************************************
-  ===== EDIT THESE: WiFi / MQTT / device config =====
-**************************************************/
-const char* WIFI_SSID      = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD  = "YOUR_WIFI_PASSWORD";
-
-const char* MQTT_HOST      = "192.168.1.10";   // your HA/MQTT broker IP
-const uint16_t MQTT_PORT   = 1883;
-const char* MQTT_USER      = "mqtt_user";      // leave "" if no auth
-const char* MQTT_PASSWORD  = "mqtt_pass";      // leave "" if no auth
-
-// A short human-readable label for WHERE this reader is - this is the
-// only thing you need to change per device. It gets combined with the
-// chip's own unique hardware ID below, so you can never accidentally
-// have two readers collide on the same MQTT client ID / topics / HA
-// device entry, even if you forget to edit anything else.
-const char* LOCATION_NAME  = "living_room";   // <-- EDIT per device: kitchen, bedroom, etc.
+// WIFI_SSID, WIFI_PASSWORD, MQTT_HOST, MQTT_PORT, MQTT_USER,
+// MQTT_PASSWORD and LOCATION_NAME are defined in secrets.h (gitignored -
+// copy secrets.h.example to secrets.h and edit it, see README)
+#include "secrets.h"
 
 // Derived automatically at boot - do not edit
 String DEVICE_ID;      // e.g. "living_room_3fa2c1"  (unique per physical chip)

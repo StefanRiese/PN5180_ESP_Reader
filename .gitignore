@@ -1,0 +1,3 @@
+# WiFi/MQTT credentials - never commit real secrets to this public repo.
+# Copy secrets.h.example to secrets.h and fill in your own values.
+secrets.h

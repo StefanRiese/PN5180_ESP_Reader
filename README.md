@@ -67,3 +67,35 @@ On boot, the sketch resets the PN5180, prints its product/firmware/EEPROM
 versions, and enables the RF field. If it reports `Initialization failed!?`,
 double-check the wiring (especially NSS/BUSY/RST and power) and press the
 reset button.
+
+# WiFi + MQTT / Home Assistant sketch
+
+`Firmware/Pn5180Esp_WiFi_MQTT/Pn5180Esp_WiFi_MQTT.ino` is a standalone
+variant for ESP8266/ESP32 boards that connects to WiFi, publishes every
+scanned tag UID to an MQTT broker, and auto-registers itself in Home
+Assistant via MQTT Tag discovery — no host PC needed. It's built on top of
+`Pn5180Esp.ino`: the serial commands `v`/`u`/`l`/`i` behave exactly the
+same (plus a new `w` command for WiFi/MQTT status), so any existing
+serial-based tooling keeps working unchanged.
+
+1. Follow steps 1–5 above (board support + libraries + wiring), and also
+   install via Library Manager:
+   - `PubSubClient` (by Nick O'Leary)
+2. Open `Firmware/Pn5180Esp_WiFi_MQTT/Pn5180Esp_WiFi_MQTT.ino` and edit the
+   config block near the top:
+   - `WIFI_SSID` / `WIFI_PASSWORD` — your WiFi credentials
+   - `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASSWORD` — your
+     MQTT broker (e.g. the Mosquitto add-on in Home Assistant)
+   - `LOCATION_NAME` — a short label per device (e.g. `kitchen`); it's
+     combined with the chip's unique ID so multiple readers never collide
+3. Upload and open the Serial Monitor (`115200` baud) to confirm WiFi and
+   MQTT connect successfully.
+4. The reader publishes each scanned UID (as plain text) to
+   `<location>_<chipid>/tag_scanned`, and publishes an MQTT Discovery
+   config (retained) to `homeassistant/tag/<location>_<chipid>/config`,
+   so Home Assistant automatically creates a Tag scanner entity for the
+   device — no manual YAML required. Availability (`online`/`offline`,
+   via LWT) is published to `<location>_<chipid>/status`.
+5. In Home Assistant, create an automation with trigger type **Tag
+   scanned** for this device, and match on the specific `tag_id` (the
+   UID) to react to individual tags.

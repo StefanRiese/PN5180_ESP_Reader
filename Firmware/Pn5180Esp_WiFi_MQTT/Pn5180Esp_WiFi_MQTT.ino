@@ -54,6 +54,12 @@ String TOPIC_DISCOVERY;   // HA discovery config topic
 #define VERSION "2.0-wifi"
 #define SKETCHNAME "Pn5180Esp"
 #define LED_BRIGHTNESS 10
+// Much dimmer than LED_BRIGHTNESS, so the "still alive" heartbeat blip
+// doesn't compete visually with an actual tag-recognized flash
+#define HEARTBEAT_BRIGHTNESS 2
+// Tag-recognized flash: a distinct color (cyan) and noticeably longer
+// than the heartbeat, so a real scan is unmistakable at a glance
+#define TAG_FLASH_DURATION_MS 500
 
 #if defined(ARDUINO_ARCH_ESP8266)
   #define PN5180_NSS 4
@@ -186,11 +192,11 @@ void loop()
 void heartbeat()
 {
   if (WiFi.status() != WL_CONNECTED) {
-    ledFeedback(LED_BRIGHTNESS, 0, 0, 20);
+    ledFeedback(HEARTBEAT_BRIGHTNESS, 0, 0, 20);
   } else if (!mqtt.connected()) {
-    ledFeedback(LED_BRIGHTNESS, LED_BRIGHTNESS, 0, 20);
+    ledFeedback(HEARTBEAT_BRIGHTNESS, HEARTBEAT_BRIGHTNESS, 0, 20);
   } else {
-    ledFeedback(0, LED_BRIGHTNESS, 0, 20);
+    ledFeedback(0, HEARTBEAT_BRIGHTNESS, 0, 20);
   }
 }
 
@@ -366,6 +372,14 @@ void pollTag()
 
   ISO15693ErrorCode rc = nfc15693.getInventory(uid);
 
+  if (rc == ISO15693_EC_OK && !isPlausibleUid(uid)) {
+    // The chip reported success but the UID looks corrupted (e.g. a
+    // weak/partial RF read during a collision or a tag leaving the
+    // field mid-read) - treat it the same as "no tag" rather than
+    // publishing garbage.
+    rc = ISO15693_EC_UNKNOWN_ERROR;
+  }
+
   if (rc == ISO15693_EC_OK) {
     String uidStr = uidToString(uid);
     bool isNewTag = (uidStr != lastUid);
@@ -398,7 +412,7 @@ void pollTag()
 
 void onTagScanned(String uid)
 {
-  ledFeedback(0, LED_BRIGHTNESS, 0, 150);
+  ledFeedback(0, LED_BRIGHTNESS, LED_BRIGHTNESS, TAG_FLASH_DURATION_MS); // cyan: tag recognized
 
   if (mqtt.connected()) {
     bool sent = mqtt.publish(TOPIC_SCAN.c_str(), uid.c_str(), false); // not retained
@@ -408,6 +422,23 @@ void onTagScanned(String uid)
   } else {
     ledFeedback(LED_BRIGHTNESS, LED_BRIGHTNESS, 0, 300); // amber: not connected
   }
+}
+
+// Rejects UIDs that couldn't possibly belong to a real tag: a genuine
+// ISO15693 UID's most-significant byte (uid[7]) is the IC manufacturer
+// code per ISO/IEC 7816-6, which is never 0x00, and real UIDs aren't
+// mostly zero bytes. This catches corrupted/partial RF reads that the
+// PN5180 chip still reported as "OK" (e.g. a weak read during a
+// collision or a tag leaving the field mid-read).
+bool isPlausibleUid(uint8_t* uid)
+{
+  if (uid[7] == 0x00) return false;
+
+  uint8_t zeroBytes = 0;
+  for (int i = 0; i < 8; i++) {
+    if (uid[i] == 0x00) zeroBytes++;
+  }
+  return zeroBytes <= 5;
 }
 
 String uidToString(uint8_t* uid)

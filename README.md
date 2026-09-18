@@ -78,12 +78,22 @@ Assistant via MQTT Tag discovery — no host PC needed. It's built on top of
 same (plus a new `w` command for WiFi/MQTT status), so any existing
 serial-based tooling keeps working unchanged.
 
-Every 2 seconds it also blips the status LED briefly so you can tell at a
-glance that it's alive, without needing a serial connection: **green** =
-WiFi and MQTT both up, **amber** = WiFi up but MQTT down, **red** = WiFi
-down. This heartbeat is separate from (and much dimmer/briefer than) the
-scan-result flash (green/red on a tag read, amber if a scan couldn't be
-published).
+## LED patterns
+
+| Event | Color | Duration | Notes |
+|---|---|---|---|
+| Heartbeat (every 2s) | Green | brief, very dim | WiFi + MQTT both up |
+| Heartbeat (every 2s) | Amber | brief, very dim | WiFi up, MQTT down |
+| Heartbeat (every 2s) | Red | brief, very dim | WiFi down |
+| Tag recognized & published | Cyan | longer (500ms), normal brightness | A real tag was read and its UID sent |
+| Tag recognized, publish failed | Amber | 300ms, normal brightness | Read OK, but MQTT wasn't connected or the publish failed |
+
+The heartbeat is intentionally dim and brief so it doesn't distract or
+get confused with an actual tag scan — a tag read flashes noticeably
+brighter/longer and in a different color (cyan) so it's unmistakable.
+Corrupted/partial reads (e.g. a UID that's implausible, such as being
+mostly zero bytes) are filtered out before ever reaching the LED or MQTT,
+so a flash only ever means a real tag was seen.
 
 1. Follow steps 1–5 above (board support + libraries + wiring), and also
    install via Library Manager:

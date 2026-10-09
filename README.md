@@ -135,8 +135,8 @@ a truly frozen state - worth a manual power cycle either way.
 5. In Home Assistant, create an automation with trigger type **Tag
    scanned** for this device, and match on the specific `tag_id` (the
    UID) to react to individual tags.
-   When a tag is lifted off the reader and stays away for 5s
-   (`TAG_AWAY_THRESHOLD_MS`), an **empty** payload is published to the
+   When a tag is lifted off the reader and stays away for the
+   tag removal timeout (default 2s, see below), an **empty** payload is published to the
    same `tag_scanned` topic, e.g. to stop playback. Home Assistant's Tag
    scanned trigger ignores empty IDs, so use an **MQTT** trigger on that
    topic with `payload: ""` for the stop automation.
@@ -156,3 +156,9 @@ a truly frozen state - worth a manual power cycle either way.
    stays active regardless. Your choice survives a device reboot: HA
    publishes the on/off command retained, so a fresh reconnect after
    any restart immediately re-applies it.
+9. A **Tag removal timeout** number entity (config category, 0.5–30s,
+   default 2s) sets how long a tag must be gone before the empty
+   "removed" message is sent — and before the same tag re-triggers when
+   put back. Also settable by publishing seconds (e.g. `3.5`) retained to
+   `<location>_<chipid>/tag_away_timeout/set`; it survives reboots the
+   same way as the Heartbeat LED switch.

@@ -33,7 +33,7 @@
 // with no error. PubSubClient.cpp is compiled as its own translation
 // unit, so a #define here wouldn't reach it - the buffer must be
 // grown at runtime instead, via setBufferSize() in setup().
-#define MQTT_BUFFER_SIZE 512
+#define MQTT_BUFFER_SIZE 768
 
 // WIFI_SSID, WIFI_PASSWORD, MQTT_HOST, MQTT_PORT, MQTT_USER,
 // MQTT_PASSWORD and LOCATION_NAME are defined in secrets.h (gitignored -
@@ -55,11 +55,14 @@ String TOPIC_VERSION_DISCOVERY;   // HA discovery config for the version sensor
 String TOPIC_HEARTBEAT_LED_STATE; // current on/off state of the heartbeat LED
 String TOPIC_HEARTBEAT_LED_SET;   // HA sends ON/OFF commands here
 String TOPIC_HEARTBEAT_LED_DISCOVERY; // HA discovery config for the switch
+String TOPIC_TAG_AWAY_STATE;      // current tag-away threshold, seconds
+String TOPIC_TAG_AWAY_SET;        // HA sends a new threshold (seconds) here
+String TOPIC_TAG_AWAY_DISCOVERY;  // HA discovery config for the number entity
 
 /**************************************************
   Existing defines / pins (unchanged from original sketch)
 **************************************************/
-#define VERSION "2.2.0"
+#define VERSION "2.3.0"
 #define SKETCHNAME "Pn5180Esp"
 #define LED_BRIGHTNESS 10
 // Much dimmer than LED_BRIGHTNESS, so the "still alive" heartbeat blip
@@ -84,9 +87,12 @@ String TOPIC_HEARTBEAT_LED_DISCOVERY; // HA discovery config for the switch
 
 // How often to poll the reader for a tag, ms
 #define POLL_INTERVAL_MS 500
-// Minimum time the SAME tag must be physically away from the reader
-// before it's allowed to trigger onTagScanned() again, ms
-#define TAG_AWAY_THRESHOLD_MS 5000
+// Minimum time a tag must be physically away from the reader before the
+// removal is published and the SAME tag may trigger onTagScanned() again,
+// ms. Default only - adjustable at runtime from Home Assistant.
+#define TAG_AWAY_THRESHOLD_MS 2000
+#define TAG_AWAY_MIN_MS 500
+#define TAG_AWAY_MAX_MS 30000
 // How often to blip the status LED to show the reader is still alive, ms
 #define HEARTBEAT_INTERVAL_MS 2000
 // How often to publish an MQTT heartbeat (device uptime) so the broker
@@ -131,6 +137,8 @@ bool tagRemovalPending = false; // tag lifted off, empty "removed" message not s
 // Controls only the visual heartbeat LED blip - the watchdog safety
 // mechanism itself (checkWatchdog()) always stays active regardless.
 bool heartbeatLedEnabled = true;
+
+unsigned long tagAwayThresholdMs = TAG_AWAY_THRESHOLD_MS;
 
 // --- Reconnect state (non-blocking, with exponential backoff) ---
 unsigned long lastWifiAttempt = 0;
@@ -177,6 +185,9 @@ void setup()
   TOPIC_HEARTBEAT_LED_STATE = DEVICE_ID + "/heartbeat_led/state";
   TOPIC_HEARTBEAT_LED_SET   = DEVICE_ID + "/heartbeat_led/set";
   TOPIC_HEARTBEAT_LED_DISCOVERY = "homeassistant/switch/" + DEVICE_ID + "_heartbeat_led/config";
+  TOPIC_TAG_AWAY_STATE      = DEVICE_ID + "/tag_away_timeout/state";
+  TOPIC_TAG_AWAY_SET        = DEVICE_ID + "/tag_away_timeout/set";
+  TOPIC_TAG_AWAY_DISCOVERY  = "homeassistant/number/" + DEVICE_ID + "_tag_away_timeout/config";
 
   // --- PN5180 init (same as original) ---
   nfc15693.begin();
@@ -387,26 +398,39 @@ void connectMqtt()
     publishHeartbeatDiscovery();
     publishVersionDiscovery();
     publishHeartbeatLedDiscovery();
+    publishTagAwayDiscovery();
     publishVersion();
     publishHeartbeat();
     publishHeartbeatLedState();
+    publishTagAwayState();
     // Subscriptions don't survive a reconnect (clean session), so
     // re-subscribe here. The broker immediately redelivers the last
     // retained command (see the "retain":true in the discovery config),
     // so a reboot correctly re-applies your last on/off choice.
     mqtt.subscribe(TOPIC_HEARTBEAT_LED_SET.c_str());
+    mqtt.subscribe(TOPIC_TAG_AWAY_SET.c_str());
     lastMqttHeartbeatMillis = millis(); // don't immediately re-fire in loop()
   }
 }
 
-// Handles incoming commands from Home Assistant (currently just the
-// heartbeat LED on/off switch).
+// Handles incoming commands from Home Assistant (heartbeat LED on/off
+// switch and the tag-away timeout number).
 void mqttCallback(char* topic, byte* payload, unsigned int length)
 {
   if (TOPIC_HEARTBEAT_LED_SET.equals(topic)) {
     bool enable = (length == 2 && payload[0] == 'O' && payload[1] == 'N');
     heartbeatLedEnabled = enable;
     publishHeartbeatLedState();
+  } else if (TOPIC_TAG_AWAY_SET.equals(topic)) {
+    char buf[16];
+    if (length == 0 || length >= sizeof(buf)) return;
+    memcpy(buf, payload, length);
+    buf[length] = '\0';
+    long ms = lround(atof(buf) * 1000.0); // payload is in seconds
+    if (ms < TAG_AWAY_MIN_MS) ms = TAG_AWAY_MIN_MS;
+    if (ms > TAG_AWAY_MAX_MS) ms = TAG_AWAY_MAX_MS;
+    tagAwayThresholdMs = ms;
+    publishTagAwayState();
   }
 }
 
@@ -505,6 +529,38 @@ void publishHeartbeatLedState()
   mqtt.publish(TOPIC_HEARTBEAT_LED_STATE.c_str(), heartbeatLedEnabled ? "ON" : "OFF", true);
 }
 
+// Publishes HA number discovery for the tag-away timeout (in seconds).
+// Like the heartbeat LED switch, "retain":true makes HA's command
+// retained so the value survives a device reboot.
+void publishTagAwayDiscovery()
+{
+  String payload = String("{") +
+    "\"name\":\"Tag removal timeout\"," +
+    "\"unique_id\":\"" + DEVICE_ID + "_tag_away_timeout\"," +
+    "\"state_topic\":\"" + TOPIC_TAG_AWAY_STATE + "\"," +
+    "\"command_topic\":\"" + TOPIC_TAG_AWAY_SET + "\"," +
+    "\"retain\":true," +
+    "\"min\":" + String(TAG_AWAY_MIN_MS / 1000.0, 1) + "," +
+    "\"max\":" + String(TAG_AWAY_MAX_MS / 1000.0, 1) + "," +
+    "\"step\":0.5," +
+    "\"mode\":\"box\"," +
+    "\"unit_of_measurement\":\"s\"," +
+    "\"availability_topic\":\"" + TOPIC_AVAILABILITY + "\"," +
+    "\"icon\":\"mdi:timer-outline\"," +
+    "\"entity_category\":\"config\"," +
+    "\"device\":" + deviceBlockJson() +
+  "}";
+
+  mqtt.publish(TOPIC_TAG_AWAY_DISCOVERY.c_str(), payload.c_str(), true);
+}
+
+void publishTagAwayState()
+{
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%.1f", tagAwayThresholdMs / 1000.0);
+  mqtt.publish(TOPIC_TAG_AWAY_STATE.c_str(), buf, true);
+}
+
 /**************************************************
   Tries to disable ISO15693 privacy mode (e.g. NXP ICODE SLIX2 tags,
   the kind used by Tonies-style figurines) so a subsequent Inventory
@@ -570,7 +626,7 @@ void pollTag()
       // same tag as before, but it had been lifted off - only
       // re-trigger if it was actually away for long enough
       unsigned long awayDuration = millis() - tagAbsentSinceMillis;
-      if (awayDuration >= TAG_AWAY_THRESHOLD_MS) {
+      if (awayDuration >= tagAwayThresholdMs) {
         onTagScanned(uidBuf);
       }
       // else: put back too soon, ignored - still just sitting there as far as HA is concerned
@@ -591,7 +647,7 @@ void pollTag()
     // Only report the removal once the tag has been away long enough to
     // count as really gone - same threshold as re-triggering, so a brief
     // misread/flicker never sends a "stop" without a matching re-scan.
-    if (tagRemovalPending && millis() - tagAbsentSinceMillis >= TAG_AWAY_THRESHOLD_MS) {
+    if (tagRemovalPending && millis() - tagAbsentSinceMillis >= tagAwayThresholdMs) {
       tagRemovalPending = false;
       onTagRemoved();
     }

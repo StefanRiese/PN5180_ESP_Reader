@@ -135,6 +135,11 @@ a truly frozen state - worth a manual power cycle either way.
 5. In Home Assistant, create an automation with trigger type **Tag
    scanned** for this device, and match on the specific `tag_id` (the
    UID) to react to individual tags.
+   When a tag is lifted off the reader and stays away for 5s
+   (`TAG_AWAY_THRESHOLD_MS`), an **empty** payload is published to the
+   same `tag_scanned` topic, e.g. to stop playback. Home Assistant's Tag
+   scanned trigger ignores empty IDs, so use an **MQTT** trigger on that
+   topic with `payload: ""` for the stop automation.
 6. `<location>_<chipid>/heartbeat` (retained) holds the device's uptime
    in seconds, republished every 30s. Unlike `status` — which only
    changes on connect/disconnect and can't tell "connected but silently

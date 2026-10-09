@@ -59,7 +59,7 @@ String TOPIC_HEARTBEAT_LED_DISCOVERY; // HA discovery config for the switch
 /**************************************************
   Existing defines / pins (unchanged from original sketch)
 **************************************************/
-#define VERSION "2.1.0"
+#define VERSION "2.2.0"
 #define SKETCHNAME "Pn5180Esp"
 #define LED_BRIGHTNESS 10
 // Much dimmer than LED_BRIGHTNESS, so the "still alive" heartbeat blip
@@ -126,6 +126,7 @@ unsigned long lastPollMillis = 0;
 unsigned long lastHeartbeatMillis = 0;
 unsigned long lastMqttHeartbeatMillis = 0;
 bool tagPresentLastPoll = false;
+bool tagRemovalPending = false; // tag lifted off, empty "removed" message not sent yet
 
 // Controls only the visual heartbeat LED blip - the watchdog safety
 // mechanism itself (checkWatchdog()) always stays active regardless.
@@ -578,12 +579,31 @@ void pollTag()
     // it's just still sitting on the reader - nothing to do
 
     tagPresentLastPoll = true;
+    tagRemovalPending = false; // back (or replaced) before the removal fired
   } else {
     // No tag currently on the reader
     if (tagPresentLastPoll) {
       tagAbsentSinceMillis = millis(); // mark the moment it disappeared
+      tagRemovalPending = true;
     }
     tagPresentLastPoll = false;
+
+    // Only report the removal once the tag has been away long enough to
+    // count as really gone - same threshold as re-triggering, so a brief
+    // misread/flicker never sends a "stop" without a matching re-scan.
+    if (tagRemovalPending && millis() - tagAbsentSinceMillis >= TAG_AWAY_THRESHOLD_MS) {
+      tagRemovalPending = false;
+      onTagRemoved();
+    }
+  }
+}
+
+// Publishes an empty payload to the scan topic so automations can stop
+// whatever the tag started.
+void onTagRemoved()
+{
+  if (mqtt.connected()) {
+    mqtt.publish(TOPIC_SCAN.c_str(), "", false); // not retained
   }
 }
 

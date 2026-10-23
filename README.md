@@ -76,7 +76,9 @@ scanned tag UID to an MQTT broker, and auto-registers itself in Home
 Assistant via MQTT Tag discovery — no host PC needed. It's built on top of
 `Pn5180Esp.ino`: the serial commands `v`/`u`/`l`/`i` behave exactly the
 same (plus a new `w` command for WiFi/MQTT status), so any existing
-serial-based tooling keeps working unchanged.
+serial-based tooling keeps working unchanged. Send `w0` to switch WiFi and
+MQTT off (serial-only operation) and `w1` to switch them back on; this is
+not persisted, so networking is always enabled again after a reboot.
 
 ## LED patterns
 
@@ -85,6 +87,7 @@ serial-based tooling keeps working unchanged.
 | Heartbeat (every 2s) | Green | brief, very dim | WiFi + MQTT both up |
 | Heartbeat (every 2s) | Amber | brief, very dim | WiFi up, MQTT down |
 | Heartbeat (every 2s) | Red | brief, very dim | WiFi down |
+| Heartbeat (every 2s) | Blue | brief, very dim | WiFi/MQTT disabled via `w0` |
 | Tag recognized & published | Cyan | longer (500ms), normal brightness | A real tag was read and its UID sent |
 | Tag recognized, publish failed | Amber | 300ms, normal brightness | Read OK, but MQTT wasn't connected or the publish failed |
 

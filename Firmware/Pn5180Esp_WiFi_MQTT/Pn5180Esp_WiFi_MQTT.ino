@@ -6,8 +6,8 @@
         (no host PC / serial polling required).
 
   The serial interface (commands v/u/l/i) behaves exactly like the
-  original Pn5180Esp.ino sketch - only a 'w' command (WiFi/MQTT status)
-  was added on top.
+  original Pn5180Esp.ino sketch - only a 'w' command (WiFi/MQTT status,
+  'w0'/'w1' to disable/enable networking) was added on top.
 
   Libraries needed (install via Arduino Library Manager):
     - PN5180 library (whatever you already used - e.g. playfultechnology/PN5180-Library)
@@ -62,7 +62,7 @@ String TOPIC_TAG_AWAY_DISCOVERY;  // HA discovery config for the number entity
 /**************************************************
   Existing defines / pins (unchanged from original sketch)
 **************************************************/
-#define VERSION "2.3.0"
+#define VERSION "2.4.0"
 #define SKETCHNAME "Pn5180Esp"
 #define LED_BRIGHTNESS 10
 // Much dimmer than LED_BRIGHTNESS, so the "still alive" heartbeat blip
@@ -139,6 +139,11 @@ bool tagRemovalPending = false; // tag lifted off, empty "removed" message not s
 bool heartbeatLedEnabled = true;
 
 unsigned long tagAwayThresholdMs = TAG_AWAY_THRESHOLD_MS;
+
+// WiFi + MQTT on/off, toggled via the 'w0'/'w1' serial commands. Not
+// persisted - always back on after a reboot. When off, the reader runs
+// serial-only like the original sketch.
+bool networkEnabled = true;
 
 // --- Reconnect state (non-blocking, with exponential backoff) ---
 unsigned long lastWifiAttempt = 0;
@@ -223,10 +228,12 @@ void loop()
 
   // Keep network alive - non-blocking, with backoff so an outage
   // doesn't freeze tag polling or hammer the router/broker
-  maintainWiFi();
-  maintainMqtt();
-  mqtt.loop();
-  MDNS.update();
+  if (networkEnabled) {
+    maintainWiFi();
+    maintainMqtt();
+    mqtt.loop();
+    MDNS.update();
+  }
 
   // Serial debug interface still works, identical to the original sketch
   serialInterface();
@@ -279,7 +286,9 @@ void publishHeartbeat()
 
 void heartbeat()
 {
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!networkEnabled) {
+    ledFeedback(0, 0, HEARTBEAT_BRIGHTNESS, 20);
+  } else if (WiFi.status() != WL_CONNECTED) {
     ledFeedback(HEARTBEAT_BRIGHTNESS, 0, 0, 20);
   } else if (!mqtt.connected()) {
     ledFeedback(HEARTBEAT_BRIGHTNESS, HEARTBEAT_BRIGHTNESS, 0, 20);
@@ -368,6 +377,39 @@ void maintainMqtt()
     // back off so we don't hammer the broker if it stays down
     mqttRetryInterval = min(mqttRetryInterval * 2, RETRY_INTERVAL_MAX);
   }
+}
+
+/**************************************************
+  Turns WiFi + MQTT on or off at runtime (until the next reboot).
+**************************************************/
+void setNetworkEnabled(bool enable)
+{
+  if (enable != networkEnabled) {
+    networkEnabled = enable;
+
+    if (enable) {
+      WiFi.mode(WIFI_STA);
+      WiFi.hostname(DEVICE_ID.c_str());
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+      // maintainWiFi()/maintainMqtt() take it from here, starting fresh
+      wifiWasConnected = false;
+      lastWifiAttempt = millis();
+      wifiRetryInterval = 5000;
+      mqttRetryInterval = 5000;
+      lastMqttAttempt = millis() - mqttRetryInterval; // first MQTT attempt as soon as WiFi is up
+    } else {
+      if (mqtt.connected()) {
+        // a clean disconnect doesn't fire the Last Will, so report it ourselves
+        mqtt.publish(TOPIC_AVAILABILITY.c_str(), "offline", true);
+        mqtt.disconnect();
+      }
+      MDNS.end();
+      WiFi.disconnect(true);
+      WiFi.mode(WIFI_OFF);
+      wifiWasConnected = false;
+    }
+  }
+  Serial.println(networkEnabled ? F("WiFi/MQTT enabled") : F("WiFi/MQTT disabled"));
 }
 
 /**************************************************
@@ -667,7 +709,9 @@ void onTagScanned(const char* uid)
 {
   ledFeedback(0, LED_BRIGHTNESS, LED_BRIGHTNESS, TAG_FLASH_DURATION_MS); // cyan: tag recognized
 
-  if (mqtt.connected()) {
+  if (!networkEnabled) {
+    return; // serial-only mode - nothing to publish, so no "failed" flash
+  } else if (mqtt.connected()) {
     bool sent = mqtt.publish(TOPIC_SCAN.c_str(), uid, false); // not retained
     if (!sent) {
       ledFeedback(LED_BRIGHTNESS, LED_BRIGHTNESS, 0, 300); // amber: publish failed
@@ -708,7 +752,8 @@ void uidToBuffer(uint8_t* uid, char* out)
 /**************************************************
   Serial interface for communication to the PC
   - identical behaviour to the original Pn5180Esp.ino sketch (v/u/l/i),
-    plus a new 'w' command to report WiFi/MQTT status.
+    plus a new 'w' command to report WiFi/MQTT status ('w0'/'w1'
+    disable/enable WiFi + MQTT until the next reboot).
 **************************************************/
 void serialInterface()
 {
@@ -772,9 +817,19 @@ void handleCommand(String command)
       ledFeedback(LED_BRIGHTNESS, 0, 0, 100);
     }
   }
+  else if (command.startsWith("w0"))
+  {
+    setNetworkEnabled(false);
+  }
+  else if (command.startsWith("w1"))
+  {
+    setNetworkEnabled(true);
+  }
   else if (command.startsWith("w"))
   {
     // Print current WiFi/MQTT status for debugging (new in this sketch)
+    Serial.print(F("Network: "));
+    Serial.println(networkEnabled ? "enabled" : "disabled");
     Serial.print(F("WiFi: "));
     Serial.println(WiFi.status() == WL_CONNECTED ? "connected" : "disconnected");
     Serial.print(F("MQTT: "));

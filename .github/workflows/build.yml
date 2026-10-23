@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -17,14 +17,23 @@ jobs:
           - Firmware/Pn5180Esp_WiFi_MQTT
     env:
       FQBN: esp8266:esp8266:d1_mini
+      ARDUINO_CLI_VERSION: 1.5.1
+      ARDUINO_CLI_SHA256: 28a8e119c498a25607821c36cb2dc49e8463941b261a0d99091baa7bc692dd2b
       # needed for installing the PN5180 library from git (not in the Library Manager index)
       ARDUINO_LIBRARY_ENABLE_UNSAFE_INSTALL: "true"
     steps:
       - uses: actions/checkout@v7
 
-      - uses: arduino/setup-arduino-cli@v2
-        with:
-          version: 1.5.1
+      # Installed directly instead of via arduino/setup-arduino-cli, whose
+      # latest release still targets the deprecated Node.js 20 runtime
+      - name: Install arduino-cli
+        run: |
+          tarball="arduino-cli_${ARDUINO_CLI_VERSION}_Linux_64bit.tar.gz"
+          curl -fsSL -o "$tarball" "https://github.com/arduino/arduino-cli/releases/download/v${ARDUINO_CLI_VERSION}/${tarball}"
+          echo "${ARDUINO_CLI_SHA256}  ${tarball}" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$tarball" -C "$HOME/.local/bin" arduino-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install ESP8266 core
         run: |
@@ -36,10 +45,21 @@ jobs:
           arduino-cli lib install "Adafruit NeoPixel@1.15.5" "PubSubClient@2.8"
           arduino-cli lib install --git-url https://github.com/ATrappmann/PN5180-Library.git#cf61c3a21fd8930eee349cca5bb878fdd2f3d69b
 
+      # Upstream is unmaintained, so fix its -Wnarrowing warning here: len is
+      # already range-checked to <= 254 just above, so the cast is safe
+      - name: Patch PN5180 library
+        run: |
+          f="$(arduino-cli config get directories.user)/libraries/PN5180_Library/PN5180.cpp"
+          grep -q 'uint8_t cmd\[3\] = { PN5180_READ_EEPROM, addr, len };' "$f"
+          sed -i 's/uint8_t cmd\[3\] = { PN5180_READ_EEPROM, addr, len };/uint8_t cmd[3] = { PN5180_READ_EEPROM, addr, (uint8_t)len };/' "$f"
+
       # secrets.h is gitignored; the placeholder values are enough to compile
       - name: Create placeholder secrets.h
         if: matrix.sketch == 'Firmware/Pn5180Esp_WiFi_MQTT'
         run: cp ${{ matrix.sketch }}/secrets.h.example ${{ matrix.sketch }}/secrets.h
 
       - name: Compile
-        run: arduino-cli compile --fqbn "$FQBN" --warnings default "${{ matrix.sketch }}"
+        # fail on any compiler warning, so new ones can't slip in unnoticed
+        run: |
+          arduino-cli compile --fqbn "$FQBN" --warnings default "${{ matrix.sketch }}" 2>&1 | tee build.log
+          if grep -q 'warning:' build.log; then echo "::error::compiler warnings found"; exit 1; fi

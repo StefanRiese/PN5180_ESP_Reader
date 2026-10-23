@@ -1,0 +1,45 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sketch:
+          - Firmware/Pn5180Esp
+          - Firmware/Pn5180Esp_WiFi_MQTT
+    env:
+      FQBN: esp8266:esp8266:d1_mini
+      # needed for installing the PN5180 library from git (not in the Library Manager index)
+      ARDUINO_LIBRARY_ENABLE_UNSAFE_INSTALL: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: arduino/setup-arduino-cli@v2
+        with:
+          version: 1.5.1
+
+      - name: Install ESP8266 core
+        run: |
+          arduino-cli core update-index --additional-urls https://arduino.esp8266.com/stable/package_esp8266com_index.json
+          arduino-cli core install esp8266:esp8266@3.1.2 --additional-urls https://arduino.esp8266.com/stable/package_esp8266com_index.json
+
+      - name: Install libraries
+        run: |
+          arduino-cli lib install "Adafruit NeoPixel@1.15.5" "PubSubClient@2.8"
+          arduino-cli lib install --git-url https://github.com/ATrappmann/PN5180-Library.git#cf61c3a21fd8930eee349cca5bb878fdd2f3d69b
+
+      # secrets.h is gitignored; the placeholder values are enough to compile
+      - name: Create placeholder secrets.h
+        if: matrix.sketch == 'Firmware/Pn5180Esp_WiFi_MQTT'
+        run: cp ${{ matrix.sketch }}/secrets.h.example ${{ matrix.sketch }}/secrets.h
+
+      - name: Compile
+        run: arduino-cli compile --fqbn "$FQBN" --warnings default "${{ matrix.sketch }}"

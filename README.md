@@ -1,4 +1,6 @@
 [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
+[![Build firmware](https://github.com/StefanRiese/PN5180_ESP_Reader/actions/workflows/build.yml/badge.svg)](https://github.com/StefanRiese/PN5180_ESP_Reader/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/StefanRiese/PN5180_ESP_Reader)](https://github.com/StefanRiese/PN5180_ESP_Reader/releases/latest)
 
 This work is licensed under a
 [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License][cc-by-nc-sa].
@@ -51,9 +53,12 @@ green = success, red = failure, white = boot.
    *Additional Boards Manager URLs*. Then open *Tools > Board > Boards Manager*,
    search for `esp8266` and install it.
 3. **Select the board**: *Tools > Board > ESP8266 Boards > LOLIN(WEMOS) D1 R2 & mini*.
-4. **Install required libraries** via *Sketch > Include Library > Manage Libraries*:
-   - `PN5180-Library` (by Andreas Trappmann) — provides `PN5180ISO15693.h`
-   - `Adafruit NeoPixel`
+4. **Install required libraries**:
+   - `PN5180-Library` (by Andreas Trappmann) — provides `PN5180ISO15693.h`.
+     It isn't in the Library Manager: download the ZIP from
+     https://github.com/ATrappmann/PN5180-Library (*Code > Download ZIP*) and
+     add it via *Sketch > Include Library > Add .ZIP Library*.
+   - `Adafruit NeoPixel` — via *Sketch > Include Library > Manage Libraries*.
 5. **Wire the hardware** according to the table above.
 6. **Open the sketch**: `Firmware/Pn5180Esp/Pn5180Esp.ino`.
 7. **Select the correct serial port** under *Tools > Port*, then click **Upload**.
@@ -75,40 +80,9 @@ variant for ESP8266/ESP32 boards that connects to WiFi, publishes every
 scanned tag UID to an MQTT broker, and auto-registers itself in Home
 Assistant via MQTT Tag discovery — no host PC needed. It's built on top of
 `Pn5180Esp.ino`: the serial commands `v`/`u`/`l`/`i` behave exactly the
-same (plus a new `w` command for WiFi/MQTT status), so any existing
-serial-based tooling keeps working unchanged. Send `w0` to switch WiFi and
-MQTT off (serial-only operation) and `w1` to switch them back on; this is
-not persisted, so networking is always enabled again after a reboot.
+same, so any existing serial-based tooling keeps working unchanged.
 
-## LED patterns
-
-| Event | Color | Duration | Notes |
-|---|---|---|---|
-| Heartbeat (every 2s) | Green | brief, very dim | WiFi + MQTT both up |
-| Heartbeat (every 2s) | Amber | brief, very dim | WiFi up, MQTT down |
-| Heartbeat (every 2s) | Red | brief, very dim | WiFi down |
-| Heartbeat (every 2s) | Blue | brief, very dim | WiFi/MQTT disabled via `w0` |
-| Tag recognized & published | Cyan | longer (500ms), normal brightness | A real tag was read and its UID sent |
-| Tag recognized, publish failed | Amber | 300ms, normal brightness | Read OK, but MQTT wasn't connected or the publish failed |
-
-The heartbeat is intentionally dim and brief so it doesn't distract or
-get confused with an actual tag scan — a tag read flashes noticeably
-brighter/longer and in a different color (cyan) so it's unmistakable.
-Corrupted/partial reads (e.g. a UID that's implausible, such as being
-mostly zero bytes) are filtered out before ever reaching the LED or MQTT,
-so a flash only ever means a real tag was seen.
-
-## Watchdog
-
-The PN5180 library's SPI wait loops have no timeout, so a marginal SPI
-transaction can occasionally hang the sketch completely (LED goes fully
-dark, no heartbeat at all - this is different from a "WiFi down" red
-heartbeat, which still blips). To recover automatically from this, the
-sketch runs its own watchdog on an independent hardware timer: if the
-main loop hasn't checked in for 8 seconds, the board restarts itself.
-If you ever see the LED go completely dark for more than ~10 seconds,
-that's this watchdog either about to fire or (rarely) not having caught
-a truly frozen state - worth a manual power cycle either way.
+## Setup
 
 1. Follow steps 1–5 above (board support + libraries + wiring), and also
    install via Library Manager:
@@ -150,7 +124,7 @@ a truly frozen state - worth a manual power cycle either way.
    heartbeat is visible proof something's wrong. Useful for an HA
    automation like "notify me if no heartbeat update in N minutes."
 7. The heartbeat and the firmware version (`<location>_<chipid>/version`,
-   e.g. `2.1.0`) both publish their own MQTT Discovery config too, so
+   e.g. `2.4.0`) both publish their own MQTT Discovery config too, so
    they show up as regular (diagnostic) entities grouped under the same
    device as the Tag scanner — no manual YAML needed for those either.
 8. A **Heartbeat LED** switch entity (config category) lets you turn the
@@ -165,3 +139,67 @@ a truly frozen state - worth a manual power cycle either way.
    put back. Also settable by publishing seconds (e.g. `3.5`) retained to
    `<location>_<chipid>/tag_away_timeout/set`; it survives reboots the
    same way as the Heartbeat LED switch.
+
+## Serial commands
+
+Same as the original sketch (Serial Monitor, `115200` baud), plus the `w`
+commands:
+
+| Command | Action |
+|---|---|
+| `v` | Print sketch name and firmware version |
+| `i` | Read the inventory (UID) of a nearby ISO 15693 tag |
+| `u` | Attempt to disable privacy mode (unlock) on a nearby tag |
+| `l` | Not supported, always answers `nok` (kept for compatibility) |
+| `w` | Show whether networking is enabled and the WiFi/MQTT connection status |
+| `w0` | Switch WiFi and MQTT off (serial-only operation). Publishes `offline` to the status topic first if MQTT is connected |
+| `w1` | Switch WiFi and MQTT back on |
+
+`w0`/`w1` are not persisted: WiFi and MQTT are always enabled again after a
+reboot.
+
+## LED patterns
+
+| Event | Color | Duration | Notes |
+|---|---|---|---|
+| Heartbeat (every 2s) | Green | brief, very dim | WiFi + MQTT both up |
+| Heartbeat (every 2s) | Amber | brief, very dim | WiFi up, MQTT down |
+| Heartbeat (every 2s) | Red | brief, very dim | WiFi down |
+| Heartbeat (every 2s) | Blue | brief, very dim | WiFi/MQTT disabled via `w0` |
+| Tag recognized & published | Cyan | longer (500ms), normal brightness | A real tag was read and its UID sent |
+| Tag recognized, publish failed | Amber | 300ms, normal brightness | Read OK, but MQTT wasn't connected or the publish failed |
+
+The heartbeat is intentionally dim and brief so it doesn't distract or
+get confused with an actual tag scan — a tag read flashes noticeably
+brighter/longer and in a different color (cyan) so it's unmistakable.
+Corrupted/partial reads (e.g. a UID that's implausible, such as being
+mostly zero bytes) are filtered out before ever reaching the LED or MQTT,
+so a flash only ever means a real tag was seen.
+
+## Watchdog
+
+The PN5180 library's SPI wait loops have no timeout, so a marginal SPI
+transaction can occasionally hang the sketch completely (LED goes fully
+dark, no heartbeat at all - this is different from a "WiFi down" red
+heartbeat, which still blips). To recover automatically from this, the
+sketch runs its own watchdog on an independent hardware timer: if the
+main loop hasn't checked in for 8 seconds, the board restarts itself.
+If you ever see the LED go completely dark for more than ~10 seconds,
+that's this watchdog either about to fire or (rarely) not having caught
+a truly frozen state - worth a manual power cycle either way.
+
+# Releases
+
+Tagged releases are listed on the
+[Releases page](https://github.com/StefanRiese/PN5180_ESP_Reader/releases);
+see [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
+
+# Continuous integration
+
+Every push and pull request compiles both sketches for the Wemos D1 mini
+via GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)),
+using placeholder values from `secrets.h.example`. Tool and library
+versions are pinned, and the build fails on any compiler warning. CI
+applies a one-line cast fix to the PN5180 library to silence its only
+warning (`-Wnarrowing` in `readEEprom`), so a local build with the
+unpatched library still shows that one warning.

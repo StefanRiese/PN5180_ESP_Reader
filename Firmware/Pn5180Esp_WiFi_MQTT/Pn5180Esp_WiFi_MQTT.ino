@@ -9,8 +9,9 @@
   original Pn5180Esp.ino sketch - only a 'w' command (WiFi/MQTT status,
   'w0'/'w1' to disable/enable networking) was added on top.
 
-  Libraries needed (install via Arduino Library Manager):
-    - PN5180 library (whatever you already used - e.g. playfultechnology/PN5180-Library)
+  Libraries needed (via Arduino Library Manager unless noted):
+    - PN5180-Library by Andreas Trappmann (not in the Library Manager -
+      add the ZIP from https://github.com/ATrappmann/PN5180-Library)
     - Adafruit NeoPixel
     - PubSubClient (by Nick O'Leary)      <-- NEW
     - ESP8266WiFi (bundled with ESP8266 board package) <-- NEW
